@@ -1,0 +1,468 @@
+# Assumptions used by this workflow:
+# 1. The repository is a cross-platform CMake project written in C/C++.
+# 2. Tests use Catch2. The build first tries a system Catch2 3 package and, if it is absent,
+#    CMake downloads the official Catch2 amalgamated files automatically.
+# 3. "CD" for the current repository means publishing ready-to-download build outputs as
+#    GitHub Actions artifacts, because no package registry or deployment target is defined yet.
+
+name: ci
+
+on:
+  # Run CI for every branch push so feature branches are validated before merging.
+  push:
+
+  # Run the same checks for pull requests.
+  pull_request:
+
+  # Allow manual reruns from the GitHub UI.
+  workflow_dispatch:
+
+# Keep token permissions minimal.
+permissions:
+  contents: read
+
+# Cancel older runs for the same ref when a newer commit is pushed.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Single-config Ninja builds use CMAKE_BUILD_TYPE directly on every OS here.
+  BUILD_TYPE: Release
+  BUILD_DIR: build
+  INSTALL_DIR: install
+  LOG_DIR: ci-logs
+  RESULT_DIR: ci-results
+  DOWNLOAD_DIR: ci-downloads
+  PACKAGE_DIR: ci-packages
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Linux
+  # ---------------------------------------------------------------------------
+  build-linux:
+    name: Build (Linux)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    # Linux uses bash-native commands and paths.
+    defaults:
+      run:
+        shell: bash
+
+    env:
+      ARTIFACT_SUFFIX: linux
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install native prerequisites
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes ninja-build
+
+      - name: Prepare working folders
+        run: |
+          set -euxo pipefail
+          mkdir -p "$LOG_DIR" "$PACKAGE_DIR" "$INSTALL_DIR"
+
+      - name: Configure CMake
+        run: |
+          set -euxo pipefail
+          # CMake will use a system Catch2 package if one is already available,
+          # otherwise it will download the official Catch2 amalgamated fallback.
+          cmake -S . -B "$BUILD_DIR" -G Ninja \
+            -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
+            2>&1 | tee "$LOG_DIR/configure.log"
+
+      - name: Build
+        run: |
+          set -euxo pipefail
+          cmake --build "$BUILD_DIR" --parallel 2>&1 | tee "$LOG_DIR/build.log"
+
+      - name: Install into a relocatable tree
+        run: |
+          set -euxo pipefail
+          cmake --install "$BUILD_DIR" --prefix "$INSTALL_DIR" 2>&1 | tee "$LOG_DIR/install.log"
+
+      - name: Archive build outputs
+        run: |
+          set -euxo pipefail
+          tar -czf "$PACKAGE_DIR/build-tree-$ARTIFACT_SUFFIX.tar.gz" "$BUILD_DIR"
+          tar -czf "$PACKAGE_DIR/install-tree-$ARTIFACT_SUFFIX.tar.gz" "$INSTALL_DIR"
+
+      - name: Upload build tree for downstream test job
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          # This archive is consumed by the Linux test job.
+          name: build-tree-linux
+          path: ci-packages/build-tree-linux.tar.gz
+          if-no-files-found: warn
+          retention-days: 14
+          compression-level: 0
+
+      - name: Upload install tree as final build artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: install-tree-linux
+          path: ci-packages/install-tree-linux.tar.gz
+          if-no-files-found: warn
+          retention-days: 14
+          compression-level: 0
+
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs-linux
+          path: ci-logs
+          if-no-files-found: warn
+          retention-days: 14
+
+  test-linux:
+    name: Test (Linux)
+    needs: build-linux
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    defaults:
+      run:
+        shell: bash
+
+    env:
+      ARTIFACT_SUFFIX: linux
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Prepare working folders
+        run: |
+          set -euxo pipefail
+          mkdir -p "$LOG_DIR" "$RESULT_DIR" "$DOWNLOAD_DIR"
+
+      - name: Download build tree artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: build-tree-linux
+          path: ${{ env.DOWNLOAD_DIR }}
+
+      - name: Restore build tree
+        run: |
+          set -euxo pipefail
+          tar -xzf "$DOWNLOAD_DIR/build-tree-$ARTIFACT_SUFFIX.tar.gz" -C "$GITHUB_WORKSPACE"
+
+      - name: Run unit tests
+        run: |
+          set -euxo pipefail
+          ctest --test-dir "$BUILD_DIR" \
+            --output-on-failure \
+            --output-junit "$RESULT_DIR/ctest-junit.xml" \
+            2>&1 | tee "$LOG_DIR/ctest.log"
+
+      - name: Upload test logs and results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-linux
+          path: |
+            ci-results
+            ci-logs/ctest.log
+          if-no-files-found: warn
+          retention-days: 14
+
+  # ---------------------------------------------------------------------------
+  # macOS
+  # ---------------------------------------------------------------------------
+  build-macos:
+    name: Build (macOS)
+    # Use the rolling GitHub-hosted macOS image for wider compatibility across accounts/regions.
+    runs-on: macos-latest
+    timeout-minutes: 30
+
+    # macOS also uses bash here, but package installation is done via Homebrew.
+    defaults:
+      run:
+        shell: bash
+
+    env:
+      ARTIFACT_SUFFIX: macos
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install native prerequisites
+        run: |
+          set -euxo pipefail
+          brew install ninja
+
+      - name: Prepare working folders
+        run: |
+          set -euxo pipefail
+          mkdir -p "$LOG_DIR" "$PACKAGE_DIR" "$INSTALL_DIR"
+
+      - name: Configure CMake
+        run: |
+          set -euxo pipefail
+          # CMake will use a system Catch2 package if one is already available,
+          # otherwise it will download the official Catch2 amalgamated fallback.
+          cmake -S . -B "$BUILD_DIR" -G Ninja \
+            -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
+            2>&1 | tee "$LOG_DIR/configure.log"
+
+      - name: Build
+        run: |
+          set -euxo pipefail
+          cmake --build "$BUILD_DIR" --parallel 2>&1 | tee "$LOG_DIR/build.log"
+
+      - name: Install into a relocatable tree
+        run: |
+          set -euxo pipefail
+          cmake --install "$BUILD_DIR" --prefix "$INSTALL_DIR" 2>&1 | tee "$LOG_DIR/install.log"
+
+      - name: Archive build outputs
+        run: |
+          set -euxo pipefail
+          tar -czf "$PACKAGE_DIR/build-tree-$ARTIFACT_SUFFIX.tar.gz" "$BUILD_DIR"
+          tar -czf "$PACKAGE_DIR/install-tree-$ARTIFACT_SUFFIX.tar.gz" "$INSTALL_DIR"
+
+      - name: Upload build tree for downstream test job
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-tree-macos
+          path: ci-packages/build-tree-macos.tar.gz
+          if-no-files-found: warn
+          retention-days: 14
+          compression-level: 0
+
+      - name: Upload install tree as final build artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: install-tree-macos
+          path: ci-packages/install-tree-macos.tar.gz
+          if-no-files-found: warn
+          retention-days: 14
+          compression-level: 0
+
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs-macos
+          path: ci-logs
+          if-no-files-found: warn
+          retention-days: 14
+
+  test-macos:
+    name: Test (macOS)
+    needs: build-macos
+    # Keep the test job on the same macOS image family as the corresponding build job.
+    runs-on: macos-latest
+    timeout-minutes: 15
+
+    defaults:
+      run:
+        shell: bash
+
+    env:
+      ARTIFACT_SUFFIX: macos
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Prepare working folders
+        run: |
+          set -euxo pipefail
+          mkdir -p "$LOG_DIR" "$RESULT_DIR" "$DOWNLOAD_DIR"
+
+      - name: Download build tree artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: build-tree-macos
+          path: ${{ env.DOWNLOAD_DIR }}
+
+      - name: Restore build tree
+        run: |
+          set -euxo pipefail
+          tar -xzf "$DOWNLOAD_DIR/build-tree-$ARTIFACT_SUFFIX.tar.gz" -C "$GITHUB_WORKSPACE"
+
+      - name: Run unit tests
+        run: |
+          set -euxo pipefail
+          ctest --test-dir "$BUILD_DIR" \
+            --output-on-failure \
+            --output-junit "$RESULT_DIR/ctest-junit.xml" \
+            2>&1 | tee "$LOG_DIR/ctest.log"
+
+      - name: Upload test logs and results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-macos
+          path: |
+            ci-results
+            ci-logs/ctest.log
+          if-no-files-found: warn
+          retention-days: 14
+
+  # ---------------------------------------------------------------------------
+  # Windows
+  # ---------------------------------------------------------------------------
+  build-windows:
+    name: Build (Windows)
+    runs-on: windows-2022
+    timeout-minutes: 35
+
+    # Windows uses PowerShell and native path handling.
+    defaults:
+      run:
+        shell: pwsh
+
+    env:
+      ARTIFACT_SUFFIX: windows
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # MSVC is the most common production toolchain on GitHub-hosted Windows runners.
+      - name: Set up MSVC developer command prompt
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Install native prerequisites
+        run: |
+          choco install ninja --yes --no-progress
+
+      - name: Prepare working folders
+        run: |
+          New-Item -ItemType Directory -Force -Path $env:LOG_DIR | Out-Null
+          New-Item -ItemType Directory -Force -Path $env:PACKAGE_DIR | Out-Null
+          New-Item -ItemType Directory -Force -Path $env:INSTALL_DIR | Out-Null
+
+      - name: Configure CMake
+        run: |
+          $configureArgs = @(
+            '-S', '.',
+            '-B', $env:BUILD_DIR,
+            '-G', 'Ninja',
+            "-DCMAKE_BUILD_TYPE=$env:BUILD_TYPE"
+          )
+
+          # CMake will use a system Catch2 package if one is already available,
+          # otherwise it will download the official Catch2 amalgamated fallback.
+          & cmake @configureArgs 2>&1 | Tee-Object -FilePath (Join-Path $env:LOG_DIR 'configure.log')
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build
+        run: |
+          & cmake --build $env:BUILD_DIR --parallel 2>&1 | Tee-Object -FilePath (Join-Path $env:LOG_DIR 'build.log')
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Install into a relocatable tree
+        run: |
+          & cmake --install $env:BUILD_DIR --prefix $env:INSTALL_DIR 2>&1 | Tee-Object -FilePath (Join-Path $env:LOG_DIR 'install.log')
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Archive build outputs
+        run: |
+          $buildArchive = Join-Path $env:PACKAGE_DIR "build-tree-$env:ARTIFACT_SUFFIX.tar.gz"
+          $installArchive = Join-Path $env:PACKAGE_DIR "install-tree-$env:ARTIFACT_SUFFIX.tar.gz"
+
+          tar -czf $buildArchive $env:BUILD_DIR
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          tar -czf $installArchive $env:INSTALL_DIR
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload build tree for downstream test job
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-tree-windows
+          path: ci-packages/build-tree-windows.tar.gz
+          if-no-files-found: warn
+          retention-days: 14
+          compression-level: 0
+
+      - name: Upload install tree as final build artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: install-tree-windows
+          path: ci-packages/install-tree-windows.tar.gz
+          if-no-files-found: warn
+          retention-days: 14
+          compression-level: 0
+
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs-windows
+          path: ci-logs
+          if-no-files-found: warn
+          retention-days: 14
+
+  test-windows:
+    name: Test (Windows)
+    needs: build-windows
+    runs-on: windows-2022
+    timeout-minutes: 15
+
+    defaults:
+      run:
+        shell: pwsh
+
+    env:
+      ARTIFACT_SUFFIX: windows
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Prepare working folders
+        run: |
+          New-Item -ItemType Directory -Force -Path $env:LOG_DIR | Out-Null
+          New-Item -ItemType Directory -Force -Path $env:RESULT_DIR | Out-Null
+          New-Item -ItemType Directory -Force -Path $env:DOWNLOAD_DIR | Out-Null
+
+      - name: Download build tree artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: build-tree-windows
+          path: ${{ env.DOWNLOAD_DIR }}
+
+      - name: Restore build tree
+        run: |
+          $archive = Join-Path $env:DOWNLOAD_DIR "build-tree-$env:ARTIFACT_SUFFIX.tar.gz"
+          tar -xzf $archive -C $env:GITHUB_WORKSPACE
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Run unit tests
+        run: |
+          $junitFile = Join-Path $env:RESULT_DIR 'ctest-junit.xml'
+          $testLog = Join-Path $env:LOG_DIR 'ctest.log'
+
+          & ctest --test-dir $env:BUILD_DIR --output-on-failure --output-junit $junitFile 2>&1 | Tee-Object -FilePath $testLog
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload test logs and results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-windows
+          path: |
+            ci-results
+            ci-logs/ctest.log
+          if-no-files-found: warn
+          retention-days: 14

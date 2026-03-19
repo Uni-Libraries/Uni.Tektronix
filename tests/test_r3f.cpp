@@ -1,10 +1,19 @@
-#include "catch_amalgamated.hpp"
+#if __has_include(<catch2/catch_all.hpp>)
+#include <catch2/catch_all.hpp>
+#elif __has_include(<catch_amalgamated.hpp>)
+#include <catch_amalgamated.hpp>
+#else
+#error "Catch2 headers not found: install Catch2 3 or enable the CMake amalgamated fallback."
+#endif
 
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#if defined(_WIN32)
+#include <process.h>
+#endif
 #include <sstream>
 #include <string>
 #include <system_error>
@@ -108,12 +117,30 @@ std::string shell_quote(const std::string& text) {
 }
 
 int run_tool(std::initializer_list<std::string> args) {
+#if defined(_WIN32)
+    std::vector<std::string> argv_storage;
+    argv_storage.reserve(args.size() + 1u);
+    argv_storage.push_back(tool_path().string());
+    for (const auto& arg : args) {
+        argv_storage.push_back(arg);
+    }
+
+    std::vector<const char*> argv;
+    argv.reserve(argv_storage.size() + 1u);
+    for (const auto& arg : argv_storage) {
+        argv.push_back(arg.c_str());
+    }
+    argv.push_back(nullptr);
+
+    return _spawnv(_P_WAIT, argv_storage.front().c_str(), argv.data());
+#else
     std::ostringstream command;
     command << shell_quote(tool_path().string());
     for (const auto& arg : args) {
         command << ' ' << shell_quote(arg);
     }
     return std::system(command.str().c_str());
+#endif
 }
 
 std::vector<std::uint8_t> read_binary(const std::filesystem::path& path) {

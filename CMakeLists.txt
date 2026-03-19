@@ -9,7 +9,17 @@ project(uni_tektronix
     LANGUAGES C CXX
 )
 
-set(CMAKE_C_STANDARD 23)
+if(MSVC)
+    # Current MSVC support for the C language standard is behind GCC/Clang,
+    # so use the highest C standard level that CMake/MSVC reliably expose.
+    set(UNI_TEKTRONIX_C_STANDARD 17)
+    set(UNI_TEKTRONIX_C_STANDARD_FEATURE c_std_17)
+else()
+    set(UNI_TEKTRONIX_C_STANDARD 23)
+    set(UNI_TEKTRONIX_C_STANDARD_FEATURE c_std_23)
+endif()
+
+set(CMAKE_C_STANDARD ${UNI_TEKTRONIX_C_STANDARD})
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
 
@@ -29,6 +39,17 @@ include(CMakePackageConfigHelpers)
 
 option(UNI_TEKTRONIX_BUILD_TESTS "Build Catch2-based unit tests" ON)
 option(UNI_TEKTRONIX_BUILD_TOOLS "Build tools" ON)
+option(
+    UNI_TEKTRONIX_ALLOW_CATCH2_AMALGAMATED_DOWNLOAD
+    "Download the official Catch2 amalgamated fallback when a system Catch2 package is unavailable"
+    ON
+)
+set(
+    UNI_TEKTRONIX_CATCH2_AMALGAMATED_VERSION
+    "3.7.1"
+    CACHE STRING
+    "Pinned Catch2 version used for the amalgamated fallback"
+)
 
 
 
@@ -38,6 +59,65 @@ function(uni_tektronix_apply_warnings target_name)
     else()
         target_compile_options(${target_name} PRIVATE -Wall -Wextra -Wpedantic)
     endif()
+endfunction()
+
+function(uni_tektronix_prepare_catch2_with_main out_target_name)
+    if(TARGET Catch2::Catch2WithMain)
+        set(${out_target_name} Catch2::Catch2WithMain PARENT_SCOPE)
+        return()
+    endif()
+
+    find_package(Catch2 3 CONFIG QUIET)
+    if(Catch2_FOUND)
+        message(STATUS "Using system Catch2 package")
+        set(${out_target_name} Catch2::Catch2WithMain PARENT_SCOPE)
+        return()
+    endif()
+
+    if(NOT UNI_TEKTRONIX_ALLOW_CATCH2_AMALGAMATED_DOWNLOAD)
+        message(FATAL_ERROR
+            "Catch2 3 was not found. Install a system Catch2 package or enable "
+            "UNI_TEKTRONIX_ALLOW_CATCH2_AMALGAMATED_DOWNLOAD to use the official amalgamated fallback."
+        )
+    endif()
+
+    set(catch2_amalgamated_dir "${CMAKE_CURRENT_BINARY_DIR}/_deps/catch2-amalgamated")
+    file(MAKE_DIRECTORY "${catch2_amalgamated_dir}")
+
+    foreach(catch2_file IN ITEMS catch_amalgamated.hpp catch_amalgamated.cpp)
+        set(catch2_local_path "${catch2_amalgamated_dir}/${catch2_file}")
+        if(NOT EXISTS "${catch2_local_path}")
+            set(
+                catch2_url
+                "https://raw.githubusercontent.com/catchorg/Catch2/v${UNI_TEKTRONIX_CATCH2_AMALGAMATED_VERSION}/extras/${catch2_file}"
+            )
+            message(STATUS "System Catch2 not found; downloading ${catch2_file} from ${catch2_url}")
+            file(DOWNLOAD
+                "${catch2_url}"
+                "${catch2_local_path}"
+                STATUS catch2_download_status
+                TLS_VERIFY ON
+            )
+            list(GET catch2_download_status 0 catch2_download_status_code)
+            if(NOT catch2_download_status_code EQUAL 0)
+                list(GET catch2_download_status 1 catch2_download_status_message)
+                message(FATAL_ERROR
+                    "Failed to download ${catch2_file} from ${catch2_url}: ${catch2_download_status_message}"
+                )
+            endif()
+        endif()
+    endforeach()
+
+    add_library(uni_tektronix_catch2_with_main STATIC
+        "${catch2_amalgamated_dir}/catch_amalgamated.cpp"
+    )
+    target_compile_features(uni_tektronix_catch2_with_main PUBLIC cxx_std_14)
+    target_include_directories(uni_tektronix_catch2_with_main PUBLIC "${catch2_amalgamated_dir}")
+    set_target_properties(uni_tektronix_catch2_with_main PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    add_library(Catch2::Catch2WithMain ALIAS uni_tektronix_catch2_with_main)
+
+    message(STATUS "Using downloaded Catch2 amalgamated fallback")
+    set(${out_target_name} Catch2::Catch2WithMain PARENT_SCOPE)
 endfunction()
 
 
@@ -61,7 +141,7 @@ else()
     target_compile_options(uni_tektronix PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
-target_compile_features(uni_tektronix PUBLIC c_std_23)
+target_compile_features(uni_tektronix PUBLIC ${UNI_TEKTRONIX_C_STANDARD_FEATURE})
 
 
 set_target_properties(uni_tektronix PROPERTIES POSITION_INDEPENDENT_CODE ON)
@@ -144,7 +224,7 @@ if(UNI_TEKTRONIX_BUILD_TOOLS)
         target_compile_options(uni_tektronix_tool PRIVATE -Wall -Wextra -Wpedantic)
     endif()
 
-    target_compile_features(uni_tektronix_tool PRIVATE c_std_23)
+    target_compile_features(uni_tektronix_tool PRIVATE ${UNI_TEKTRONIX_C_STANDARD_FEATURE})
 
     install(
         TARGETS uni_tektronix_tool
@@ -164,7 +244,7 @@ endif()
 if(UNI_TEKTRONIX_BUILD_TESTS)
     enable_testing()
 
-    find_package(Catch2 3 CONFIG REQUIRED)
+    uni_tektronix_prepare_catch2_with_main(UNI_TEKTRONIX_CATCH2_TARGET)
 
     add_executable(uni_tektronix_tests)
 
@@ -185,7 +265,7 @@ if(UNI_TEKTRONIX_BUILD_TESTS)
         target_compile_options(uni_tektronix_tests PRIVATE -Wall -Wextra -Wpedantic)
     endif()
 
-    target_link_libraries(uni_tektronix_tests PRIVATE uni_tektronix Catch2::Catch2WithMain)
+    target_link_libraries(uni_tektronix_tests PRIVATE uni_tektronix ${UNI_TEKTRONIX_CATCH2_TARGET})
 
     add_test(NAME uni_tektronix_tests COMMAND uni_tektronix_tests)
 endif()
