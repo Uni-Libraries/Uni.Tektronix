@@ -1,0 +1,3 @@
+@PACKAGE_INIT@
+include("${CMAKE_CURRENT_LIST_DIR}/uni_tektronixTargets.cmake")
+check_required_components(uni_tektronix)
