@@ -59,15 +59,34 @@ std::vector<int16_t> make_if_tone(std::size_t count, double sample_rate_sps, dou
 uni_tektronix_r3f_header make_header() {
     uni_tektronix_r3f_header header{};
     uni_tektronix_r3f_header_init_defaults(&header);
+    header.api_sw_version[0] = 3u;
+    header.api_sw_version[1] = 10u;
+    header.api_sw_version[2] = 0u;
+    header.api_sw_version[3] = 5u;
+    header.fx3_fw_version[0] = 1u;
+    header.fx3_fw_version[1] = 7u;
+    header.fx3_fw_version[2] = 0u;
+    header.fx3_fw_version[3] = 0u;
+    header.fpga_fw_version[0] = 2u;
+    header.fpga_fw_version[1] = 4u;
+    header.fpga_fw_version[2] = 0u;
+    header.fpga_fw_version[3] = 0u;
     header.reference_level_dbm = -10.5;
     header.rf_center_frequency_hz = 915.0e6;
     header.if_center_frequency_hz = 28.0e6;
     header.sample_rate_sps = 112.0e6;
     header.bandwidth_hz = 40.0e6;
     header.device_temperature_c = 42.0;
+    header.alignment_state = 1u;
+    header.frequency_reference_state = 3u;
+    header.trigger_mode = 1u;
+    header.trigger_source = 1u;
+    header.trigger_transition = 2u;
+    header.trigger_level_dbm = -23.75;
     header.sample_gain_scaling_factor = 0.125;
     header.signal_path_delay_seconds = 12e-9;
     header.start_sample_count = 1'000'000u;
+    header.ref_time_type = 0u;
     header.ref_sample_count = 900'000u;
     header.ref_sample_ticks_per_second = 112'000'000u;
     header.ref_time_source = 3u;
@@ -155,6 +174,22 @@ std::string read_text(const std::filesystem::path& path) {
     std::ostringstream text;
     text << is.rdbuf();
     return text.str();
+}
+
+struct ToolRunResult {
+    int exit_code;
+    std::string output;
+};
+
+ToolRunResult run_tool_capture(std::initializer_list<std::string> args) {
+    TempPath capture{"uni_tektronix_tool_capture.txt"};
+    std::ostringstream command;
+    command << shell_quote(tool_path().string());
+    for (const auto& arg : args) {
+        command << ' ' << shell_quote(arg);
+    }
+    command << " > " << shell_quote(capture.path.string()) << " 2>&1";
+    return ToolRunResult{std::system(command.str().c_str()), read_text(capture.path)};
 }
 
 std::vector<int16_t> read_i16_le_file(const std::filesystem::path& path) {
@@ -467,7 +502,23 @@ TEST_CASE("CLI supports split/pack/extract/info/validate/export-footers", "[cli]
 
     REQUIRE(std::filesystem::exists(tool_path()));
     REQUIRE(run_tool({"validate", source_r3f.path.string()}) == 0);
-    REQUIRE(run_tool({"info", source_r3f.path.string()}) == 0);
+    {
+        const auto info = run_tool_capture({"info", source_r3f.path.string()});
+        REQUIRE(info.exit_code == 0);
+        CHECK(info.output.find("file-format-version: 1.2.0.0") != std::string::npos);
+        CHECK(info.output.find("api-sw-version: 3.10.0.5") != std::string::npos);
+        CHECK(info.output.find("device-temperature-c: 42.000") != std::string::npos);
+        CHECK(info.output.find("frequency-reference-state: user (3)") != std::string::npos);
+        CHECK(info.output.find("trigger-mode: triggered (1)") != std::string::npos);
+        CHECK(info.output.find("trigger-source: if-power (1)") != std::string::npos);
+        CHECK(info.output.find("trigger-transition: falling-edge (2)") != std::string::npos);
+        CHECK(info.output.find("ref-time-type: local (0)") != std::string::npos);
+        CHECK(info.output.find("ref-sample-ticks-per-second: 112000000") != std::string::npos);
+        CHECK(info.output.find("ref-utc-time: 2025-03-19 09:30:15.123456789") != std::string::npos);
+        CHECK(info.output.find("ref-time-source: user (3)") != std::string::npos);
+        CHECK(info.output.find("sample-gain-scaling-factor: 0.125") != std::string::npos);
+        CHECK(info.output.find("correction-table-entry-count: 3") != std::string::npos);
+    }
     REQUIRE(run_tool({"split", source_r3f.path.string(), split_r3a.path.string()}) == 0);
     REQUIRE(std::filesystem::exists(split_r3a.path));
     REQUIRE(std::filesystem::exists(split_r3h.path));

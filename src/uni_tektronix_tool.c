@@ -608,6 +608,147 @@ ut_print_datetime(FILE* stream, const uni_tektronix_r3f_datetime* dt) {
             (int)dt->nanosecond);
 }
 
+static void
+ut_print_version_bytes(FILE* stream, const uint8_t version[4]) {
+    fprintf(stream,
+            "%u.%u.%u.%u",
+            (unsigned)version[0],
+            (unsigned)version[1],
+            (unsigned)version[2],
+            (unsigned)version[3]);
+}
+
+static const char*
+ut_file_data_type_name(uint32_t file_data_type) {
+    switch (file_data_type) {
+    case UNI_TEKTRONIX_R3F_FILE_DATA_TYPE_INT16_IF:
+        return "int16-if";
+    default:
+        return "unknown";
+    }
+}
+
+static const char*
+ut_alignment_state_name(uint32_t alignment_state) {
+    switch (alignment_state) {
+    case 0u:
+        return "not-aligned";
+    case 1u:
+        return "aligned";
+    default:
+        return "unknown";
+    }
+}
+
+static const char*
+ut_frequency_reference_state_name(uint32_t frequency_reference_state) {
+    switch (frequency_reference_state) {
+    case 0u:
+        return "internal";
+    case 1u:
+        return "external";
+    case 2u:
+        return "gnss";
+    case 3u:
+        return "user";
+    default:
+        return "unknown";
+    }
+}
+
+static const char*
+ut_trigger_mode_name(uint32_t trigger_mode) {
+    switch (trigger_mode) {
+    case 0u:
+        return "free-run";
+    case 1u:
+        return "triggered";
+    default:
+        return "unknown";
+    }
+}
+
+static const char*
+ut_trigger_source_name(uint32_t trigger_source) {
+    switch (trigger_source) {
+    case 0u:
+        return "external";
+    case 1u:
+        return "if-power";
+    default:
+        return "unknown";
+    }
+}
+
+static const char*
+ut_trigger_transition_name(uint32_t trigger_transition) {
+    switch (trigger_transition) {
+    case 1u:
+        return "rising-edge";
+    case 2u:
+        return "falling-edge";
+    case 3u:
+        return "either";
+    default:
+        return "unknown";
+    }
+}
+
+static const char*
+ut_data_corrected_name(uint32_t data_corrected) {
+    switch (data_corrected) {
+    case 0u:
+        return "uncorrected";
+    case 1u:
+        return "corrected";
+    default:
+        return "unknown";
+    }
+}
+
+static const char*
+ut_ref_time_type_name(uint32_t ref_time_type) {
+    switch (ref_time_type) {
+    case 0u:
+        return "local";
+    default:
+        return "unknown";
+    }
+}
+
+static const char*
+ut_ref_time_source_name(uint32_t ref_time_source) {
+    switch (ref_time_source) {
+    case 0u:
+        return "unknown";
+    case 1u:
+        return "system";
+    case 2u:
+        return "gnss";
+    case 3u:
+        return "user";
+    default:
+        return "unknown";
+    }
+}
+
+static const char*
+ut_correction_type_name(uint32_t correction_type) {
+    switch (correction_type) {
+    case 0u:
+        return "lf";
+    case 1u:
+        return "rf-if";
+    default:
+        return "unknown";
+    }
+}
+
+static void
+ut_print_named_u32(const char* key, uint32_t value, const char* name) {
+    printf("%s: %s (%u)\n", key, name, (unsigned)value);
+}
+
 static int
 ut_is_raw_layout(const uni_tektronix_r3f_header* header) {
     return header->frame_offset_bytes == 0 &&
@@ -643,6 +784,18 @@ ut_command_info(int argc, char** argv) {
             printf("frame-count: %llu\n", (unsigned long long)frame_count);
         }
     }
+    printf("file-format-version: ");
+    ut_print_version_bytes(stdout, source.header.file_format_version);
+    printf("\napi-sw-version: ");
+    ut_print_version_bytes(stdout, source.header.api_sw_version);
+    printf("\nfx3-fw-version: ");
+    ut_print_version_bytes(stdout, source.header.fx3_fw_version);
+    printf("\nfpga-fw-version: ");
+    ut_print_version_bytes(stdout, source.header.fpga_fw_version);
+    printf("\n");
+    printf("device-serial: %s\n", source.header.device_serial_number);
+    printf("device-name: %s\n", source.header.device_nomenclature);
+    printf("device-temperature-c: %.3f\n", source.header.device_temperature_c);
     printf("sample-rate-sps: %.6f\n", source.header.sample_rate_sps);
     if (source.header.sample_rate_sps > 0.0) {
         printf("duration-seconds: %.9f\n", (double)source.sample_count / source.header.sample_rate_sps);
@@ -651,14 +804,58 @@ ut_command_info(int argc, char** argv) {
     printf("if-center-hz: %.3f\n", source.header.if_center_frequency_hz);
     printf("bandwidth-hz: %.3f\n", source.header.bandwidth_hz);
     printf("reference-level-dbm: %.3f\n", source.header.reference_level_dbm);
+    ut_print_named_u32("alignment-state",
+                       source.header.alignment_state,
+                       ut_alignment_state_name(source.header.alignment_state));
+    ut_print_named_u32("frequency-reference-state",
+                       source.header.frequency_reference_state,
+                       ut_frequency_reference_state_name(source.header.frequency_reference_state));
+    ut_print_named_u32("trigger-mode",
+                       source.header.trigger_mode,
+                       ut_trigger_mode_name(source.header.trigger_mode));
+    ut_print_named_u32("trigger-source",
+                       source.header.trigger_source,
+                       ut_trigger_source_name(source.header.trigger_source));
+    ut_print_named_u32("trigger-transition",
+                       source.header.trigger_transition,
+                       ut_trigger_transition_name(source.header.trigger_transition));
+    printf("trigger-level-dbm: %.3f\n", source.header.trigger_level_dbm);
+    ut_print_named_u32("file-data-type",
+                       source.header.file_data_type,
+                       ut_file_data_type_name(source.header.file_data_type));
+    printf("frame-offset-bytes: %d\n", source.header.frame_offset_bytes);
+    printf("frame-size-bytes: %d\n", source.header.frame_size_bytes);
+    printf("sample-offset-bytes: %d\n", source.header.sample_offset_bytes);
+    printf("samples-per-frame: %d\n", source.header.samples_per_frame);
+    printf("non-sample-offset-bytes: %d\n", source.header.non_sample_offset_bytes);
+    printf("non-sample-size-bytes: %d\n", source.header.non_sample_size_bytes);
+    ut_print_named_u32("data-corrected",
+                       source.header.data_corrected,
+                       ut_data_corrected_name(source.header.data_corrected));
+    ut_print_named_u32("ref-time-type",
+                       source.header.ref_time_type,
+                       ut_ref_time_type_name(source.header.ref_time_type));
     printf("start-sample-count: %llu\n", (unsigned long long)source.header.start_sample_count);
     printf("ref-sample-count: %llu\n", (unsigned long long)source.header.ref_sample_count);
-    printf("device-serial: %s\n", source.header.device_serial_number);
-    printf("device-name: %s\n", source.header.device_nomenclature);
+    printf("ref-sample-ticks-per-second: %llu\n",
+           (unsigned long long)source.header.ref_sample_ticks_per_second);
+    printf("ref-wall-time: ");
+    ut_print_datetime(stdout, &source.header.ref_wall_time);
+    printf("\nref-utc-time: ");
+    ut_print_datetime(stdout, &source.header.ref_utc_time);
+    printf("\n");
+    ut_print_named_u32("ref-time-source",
+                       source.header.ref_time_source,
+                       ut_ref_time_source_name(source.header.ref_time_source));
     printf("start-wall-time: ");
     ut_print_datetime(stdout, &source.header.start_wall_time);
-    printf("\nref-wall-time: ");
-    ut_print_datetime(stdout, &source.header.ref_wall_time);
+    printf("\nsample-gain-scaling-factor: %.12g\n", source.header.sample_gain_scaling_factor);
+    printf("signal-path-delay-seconds: %.12g\n", source.header.signal_path_delay_seconds);
+    ut_print_named_u32("correction-type",
+                       source.header.correction.correction_type,
+                       ut_correction_type_name(source.header.correction.correction_type));
+    printf("correction-table-entry-count: %u\n",
+           (unsigned)source.header.correction.table_entry_count);
     printf("\n");
 
     ut_source_close(&source);
