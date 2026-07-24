@@ -255,8 +255,10 @@ if(UNI_TEKTRONIX_BUILD_TESTS)
     target_compile_definitions(
         uni_tektronix_tests
         PRIVATE
-            UNI_TEKTRONIX_BUILD_DIR="${CMAKE_CURRENT_BINARY_DIR}"
+            UNI_TEKTRONIX_BUILD_DIR="$<TARGET_FILE_DIR:uni_tektronix_tool>"
     )
+
+    add_dependencies(uni_tektronix_tests uni_tektronix_tool)
 
 
     if(MSVC)
