@@ -154,6 +154,13 @@ generate_export_header(
     DEPRECATED_MACRO_NAME UNI_TEKTRONIX_DEPRECATED
 )
 
+# A static library must not see the dllexport/dllimport annotations of the generated export header
+# (MSVC: C4273 inconsistent DLL linkage, LNK4217 for every consumer).
+get_target_property(uni_tektronix_type uni_tektronix TYPE)
+if(uni_tektronix_type STREQUAL "STATIC_LIBRARY")
+    target_compile_definitions(uni_tektronix PUBLIC UNI_TEKTRONIX_STATIC_DEFINE)
+endif()
+
 target_include_directories(
     uni_tektronix
     PUBLIC
@@ -242,6 +249,10 @@ endif()
 #
 
 if(UNI_TEKTRONIX_BUILD_TESTS)
+    if(NOT UNI_TEKTRONIX_BUILD_TOOLS)
+        message(FATAL_ERROR "UNI_TEKTRONIX_BUILD_TESTS requires UNI_TEKTRONIX_BUILD_TOOLS (the CLI is tested too)")
+    endif()
+
     enable_testing()
 
     uni_tektronix_prepare_catch2_with_main(UNI_TEKTRONIX_CATCH2_TARGET)
@@ -250,6 +261,7 @@ if(UNI_TEKTRONIX_BUILD_TESTS)
 
     target_sources(uni_tektronix_tests PRIVATE
         tests/test_r3f.cpp
+        tests/test_r3x_fuzz.cpp
     )
 
     target_compile_definitions(

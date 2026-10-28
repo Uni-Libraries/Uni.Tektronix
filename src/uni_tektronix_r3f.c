@@ -2,6 +2,10 @@
 #  if !defined(_POSIX_C_SOURCE)
 #    define _POSIX_C_SOURCE 200809L
 #  endif
+/* 64-bit off_t for fseeko/ftello on 32-bit POSIX targets; captures exceed 2 GiB. */
+#  if !defined(_FILE_OFFSET_BITS)
+#    define _FILE_OFFSET_BITS 64
+#  endif
 #endif
 
 #include "uni_tektronix_r3f.h"
@@ -19,6 +23,10 @@
 #define UNI_TEKTRONIX_R3F_EXPECTED_FILE_ID "Tektronix RSA300 Data File"
 #define UNI_TEKTRONIX_R3F_EXPECTED_ENDIAN 0x12345678u
 
+/* Samples converted per read call. Bounds the reader scratch independently of the frame layout
+ * declared by the (untrusted) file header; standard frames (8178 samples) still take one read. */
+#define UNI_TEKTRONIX_R3F_READ_CHUNK_SAMPLES 16384u
+
 struct uni_tektronix_r3f_reader {
     FILE* file;
     uni_tektronix_r3f_header header;
@@ -27,6 +35,7 @@ struct uni_tektronix_r3f_reader {
     uint64_t total_samples;
     size_t bytes_per_sample;
     size_t frame_sample_region_bytes;
+    size_t scratch_samples;
     uint8_t* sample_scratch;
 };
 
@@ -204,9 +213,16 @@ r3f_bytes_per_sample(uint32_t file_data_type) {
 
 static int
 r3f_seek_abs(FILE* file, uint64_t offset) {
+    /* Never let the signed offset type wrap to a negative or truncated position. */
 #if defined(_WIN32)
+    if (offset > (uint64_t)INT64_MAX) {
+        return -1;
+    }
     return _fseeki64(file, (__int64)offset, SEEK_SET);
 #else
+    if (offset > (uint64_t)INT64_MAX || (sizeof(off_t) < sizeof(uint64_t) && offset > (uint64_t)INT32_MAX)) {
+        return -1;
+    }
     return fseeko(file, (off_t)offset, SEEK_SET);
 #endif
 }
@@ -705,7 +721,11 @@ uni_tektronix_r3f_reader_open(const char* path, uni_tektronix_r3f_reader** out_r
         return status;
     }
 
-    reader->sample_scratch = (uint8_t*)malloc(reader->frame_sample_region_bytes);
+    reader->scratch_samples = (size_t)(uint32_t)reader->header.samples_per_frame;
+    if (reader->scratch_samples > UNI_TEKTRONIX_R3F_READ_CHUNK_SAMPLES) {
+        reader->scratch_samples = UNI_TEKTRONIX_R3F_READ_CHUNK_SAMPLES;
+    }
+    reader->sample_scratch = (uint8_t*)malloc(reader->scratch_samples * reader->bytes_per_sample);
     if (reader->sample_scratch == NULL) {
         fclose(reader->file);
         free(reader);
@@ -798,12 +818,17 @@ uni_tektronix_r3f_reader_read_samples_i16(uni_tektronix_r3f_reader* reader,
         const uint64_t frame_index = absolute_sample / (uint64_t)(uint32_t)reader->header.samples_per_frame;
         const uint32_t sample_in_frame = (uint32_t)(absolute_sample % (uint64_t)(uint32_t)reader->header.samples_per_frame);
         const size_t frame_remaining = (size_t)(uint32_t)reader->header.samples_per_frame - (size_t)sample_in_frame;
-        const size_t take = (limit - total_written) < frame_remaining ? (limit - total_written) : frame_remaining;
+        size_t take = (limit - total_written) < frame_remaining ? (limit - total_written) : frame_remaining;
         const uint64_t file_offset = (uint64_t)(uint32_t)reader->header.frame_offset_bytes +
                                      (frame_index * (uint64_t)(uint32_t)reader->header.frame_size_bytes) +
                                      (uint64_t)(uint32_t)reader->header.sample_offset_bytes +
                                      ((uint64_t)sample_in_frame * (uint64_t)reader->bytes_per_sample);
-        const size_t bytes_to_read = take * reader->bytes_per_sample;
+        size_t bytes_to_read = 0u;
+
+        if (take > reader->scratch_samples) {
+            take = reader->scratch_samples;
+        }
+        bytes_to_read = take * reader->bytes_per_sample;
 
         if (r3f_seek_abs(reader->file, file_offset) != 0) {
             return UNI_TEKTRONIX_R3F_STATUS_IO_ERROR;
@@ -827,9 +852,7 @@ uni_tektronix_r3f_reader_read_frame_footer(uni_tektronix_r3f_reader* reader,
                                            uint64_t frame_index,
                                            uni_tektronix_r3f_frame_footer* out_footer) {
     uint8_t footer_bytes[UNI_TEKTRONIX_R3F_FOOTER_LAYOUT_SIZE];
-    const uint64_t footer_offset = (uint64_t)(uint32_t)reader->header.frame_offset_bytes +
-                                   (frame_index * (uint64_t)(uint32_t)reader->header.frame_size_bytes) +
-                                   (uint64_t)(uint32_t)reader->header.non_sample_offset_bytes;
+    uint64_t footer_offset = 0u;
 
     if (reader == NULL || out_footer == NULL) {
         return UNI_TEKTRONIX_R3F_STATUS_INVALID_ARGUMENT;
@@ -837,6 +860,10 @@ uni_tektronix_r3f_reader_read_frame_footer(uni_tektronix_r3f_reader* reader,
     if (frame_index >= reader->frame_count) {
         return UNI_TEKTRONIX_R3F_STATUS_OUT_OF_RANGE;
     }
+
+    footer_offset = (uint64_t)(uint32_t)reader->header.frame_offset_bytes +
+                    (frame_index * (uint64_t)(uint32_t)reader->header.frame_size_bytes) +
+                    (uint64_t)(uint32_t)reader->header.non_sample_offset_bytes;
     if (r3f_seek_abs(reader->file, footer_offset) != 0) {
         return UNI_TEKTRONIX_R3F_STATUS_IO_ERROR;
     }

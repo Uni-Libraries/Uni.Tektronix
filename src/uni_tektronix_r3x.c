@@ -2,6 +2,10 @@
 #  if !defined(_POSIX_C_SOURCE)
 #    define _POSIX_C_SOURCE 200809L
 #  endif
+/* 64-bit off_t for fseeko/ftello on 32-bit POSIX targets; captures exceed 2 GiB. */
+#  if !defined(_FILE_OFFSET_BITS)
+#    define _FILE_OFFSET_BITS 64
+#  endif
 #endif
 
 #include "uni_tektronix_r3f.h"
@@ -416,9 +420,16 @@ r3x_normalize_header_for_write(uni_tektronix_r3f_header* header) {
 
 static int
 r3x_seek_abs(FILE* file, uint64_t offset) {
+    /* Never let the signed offset type wrap to a negative or truncated position. */
 #if defined(_WIN32)
+    if (offset > (uint64_t)INT64_MAX) {
+        return -1;
+    }
     return _fseeki64(file, (__int64)offset, SEEK_SET);
 #else
+    if (offset > (uint64_t)INT64_MAX || (sizeof(off_t) < sizeof(uint64_t) && offset > (uint64_t)INT32_MAX)) {
+        return -1;
+    }
     return fseeko(file, (off_t)offset, SEEK_SET);
 #endif
 }
@@ -744,7 +755,6 @@ uni_tektronix_r3a_reader_read_samples_i16(uni_tektronix_r3a_reader* reader,
                                           size_t* out_samples_read) {
     size_t limit = 0u;
     uint64_t available = 0u;
-    const uint64_t file_offset = start_sample_index * (uint64_t)reader->bytes_per_sample;
 
     if (reader == NULL || out_samples_read == NULL || (requested_samples > 0u && out_samples == NULL)) {
         return UNI_TEKTRONIX_R3F_STATUS_INVALID_ARGUMENT;
@@ -770,7 +780,7 @@ uni_tektronix_r3a_reader_read_samples_i16(uni_tektronix_r3a_reader* reader,
         limit = out_capacity;
     }
 
-    if (r3x_seek_abs(reader->data_file, file_offset) != 0) {
+    if (r3x_seek_abs(reader->data_file, start_sample_index * (uint64_t)reader->bytes_per_sample) != 0) {
         return UNI_TEKTRONIX_R3F_STATUS_IO_ERROR;
     }
     if (r3x_read_i16_le_samples(reader->data_file, out_samples, limit) != UNI_TEKTRONIX_R3F_STATUS_OK) {

@@ -49,6 +49,14 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
+Options: `UNI_TEKTRONIX_BUILD_TOOLS` (CLI, default `ON`) and `UNI_TEKTRONIX_BUILD_TESTS` (default `ON`,
+requires the CLI because the tests drive it). The library follows `BUILD_SHARED_LIBS`; static builds
+define `UNI_TEKTRONIX_STATIC_DEFINE` for consumers automatically. GCC/Clang build it as C23, MSVC as C17.
+
+The readers treat files as untrusted: header layout fields are validated against the file size, the
+read scratch buffer is bounded independently of the declared frame size, and the tests include
+fixed-seed mutation runs over `.r3f` and `.r3a/.r3h` inputs.
+
 ## CLI tool
 
 After building, the `uni_tektronix_tool` executable will be available.
