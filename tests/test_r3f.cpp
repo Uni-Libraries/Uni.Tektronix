@@ -189,7 +189,15 @@ ToolRunResult run_tool_capture(std::initializer_list<std::string> args) {
         command << ' ' << shell_quote(arg);
     }
     command << " > " << shell_quote(capture.path.string()) << " 2>&1";
-    return ToolRunResult{std::system(command.str().c_str()), read_text(capture.path)};
+#if defined(_WIN32)
+    // cmd.exe /c strips the first and the last quote of a command line that starts with one and holds more quotes
+    // (see "cmd /?"), which breaks the quoted tool path and redirect target; an outer pair of quotes is stripped
+    // instead.
+    const std::string shell_command = "\"" + command.str() + "\"";
+#else
+    const std::string shell_command = command.str();
+#endif
+    return ToolRunResult{std::system(shell_command.c_str()), read_text(capture.path)};
 }
 
 std::vector<int16_t> read_i16_le_file(const std::filesystem::path& path) {
